@@ -1,0 +1,22 @@
+function(helix_add_test name)
+    add_executable(${name} ${name}.cpp)
+    target_link_libraries(${name} PRIVATE helix_ref)
+    target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(NAME ${name} COMMAND ${name})
+endfunction()
+
+helix_add_test(test_algebra)
+
+if(TARGET helix)
+    add_executable(test_metal_parity test_metal_parity.mm)
+    target_link_libraries(test_metal_parity PRIVATE helix helix_ref)
+    target_include_directories(test_metal_parity PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(NAME test_metal_parity COMMAND test_metal_parity)
+endif()
+
+if(TARGET helix)
+    add_executable(test_drift test_drift.mm)
+    target_link_libraries(test_drift PRIVATE helix helix_ref)
+    target_include_directories(test_drift PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(NAME test_drift COMMAND test_drift)
+endif()

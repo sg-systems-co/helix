@@ -1,0 +1,15 @@
+build/
+air/
+*.metallib
+*.air
+*.d
+.DS_Store
+compile_commands.json
+# Vendored upstream and downloaded fixtures. The pinned SHA lives in
+# integration/ggml/PINNED_SHA and the patch in
+# integration/ggml/llama.cpp-helix.patch, which is what actually needs
+# versioning.
+third_party/llama.cpp/
+third_party/models/
+*.gputrace
+*.trace

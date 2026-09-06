@@ -1,0 +1,70 @@
+diff --git a/ggml/src/ggml-metal/CMakeLists.txt b/ggml/src/ggml-metal/CMakeLists.txt
+index a661e71..97a2f36 100644
+--- a/ggml/src/ggml-metal/CMakeLists.txt
++++ b/ggml/src/ggml-metal/CMakeLists.txt
+@@ -24,6 +24,33 @@ if (GGML_METAL_NDEBUG)
+     add_compile_definitions(GGML_METAL_NDEBUG)
+ endif()
+ 
++# ---------------------------------------------------------------------------
++# HELIX: optional chunk-parallel SSM_SCAN, intercepting ggml_metal_op_ssm_scan.
++# Off unless GGML_METAL_HELIX is set, and the interception point falls straight
++# through to the stock dispatch whenever HELIX cannot serve a shape.
++# ---------------------------------------------------------------------------
++if (GGML_METAL_HELIX)
++    if (NOT HELIX_ROOT)
++        set(HELIX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../..")
++    endif()
++    get_filename_component(HELIX_ROOT "${HELIX_ROOT}" ABSOLUTE)
++    if (NOT EXISTS "${HELIX_ROOT}/include/helix/helix.h")
++        message(FATAL_ERROR "GGML_METAL_HELIX set but HELIX_ROOT=${HELIX_ROOT} has no include/helix/helix.h")
++    endif()
++
++    target_sources(ggml-metal PRIVATE "${HELIX_ROOT}/integration/ggml/ggml-helix.cpp")
++    set_source_files_properties("${HELIX_ROOT}/integration/ggml/ggml-helix.cpp"
++                                PROPERTIES COMPILE_FLAGS "-x objective-c++ -fobjc-arc")
++    target_include_directories(ggml-metal PRIVATE
++                               "${HELIX_ROOT}/include"
++                               "${HELIX_ROOT}/integration/ggml"
++                               "${CMAKE_CURRENT_SOURCE_DIR}"
++                               "${CMAKE_CURRENT_SOURCE_DIR}/..")
++    target_compile_definitions(ggml-metal PRIVATE GGML_METAL_USE_HELIX)
++    target_link_libraries(ggml-metal PRIVATE "${HELIX_BUILD}/libhelix.a")
++    message(STATUS "HELIX: SSM_SCAN interception enabled (root ${HELIX_ROOT})")
++endif()
++
+ set(METALLIB_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/../ggml-common.h")
+ set(METALLIB_KERNELS_COMMON     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/common.h")
+ set(METALLIB_KERNELS_DEQUANTIZE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/dequantize.h")
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 3db8bca..4990c13 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -1,5 +1,9 @@
+ #include "ggml-metal-ops.h"
+ 
++#ifdef GGML_METAL_USE_HELIX
++#include "ggml-helix.h"
++#endif
++
+ #include "ggml.h"
+ #include "ggml-impl.h"
+ #include "ggml-backend-impl.h"
+@@ -1733,6 +1737,17 @@ int ggml_metal_op_ssm_scan(ggml_metal_op_t ctx, int idx) {
+     GGML_ASSERT(K >= 1);
+     GGML_ASSERT(ggml_nelements(op->src[1]) + K*d_state*d_inner*n_head*n_seqs == ggml_nelements(op));
+ 
++#ifdef GGML_METAL_USE_HELIX
++    // HELIX: chunk-parallel SSD scan for prefill, and on M5 a bf16 MPP
++    // tensor-ops path. Returns false for anything it cannot serve (short
++    // sequences, K > 1, unsupported shapes, no Metal device), in which case
++    // nothing has been encoded and we fall through to the dispatch below.
++    if (ggml_metal_op_ssm_scan_helix(ctx->enc, op)) {
++        ggml_metal_op_concurrency_reset(ctx);
++        return 1;
++    }
++#endif
++
+     ggml_metal_kargs_ssm_scan args = {
+         /*.d_state      =*/ d_state,
+         /*.d_inner      =*/ d_inner,
