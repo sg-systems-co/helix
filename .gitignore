@@ -1,4 +1,9 @@
 build/
+# Cross-compiled output trees and the staged libraries scripts/build-ios.sh
+# produces. Reproducible from the script, and ~10 MB per platform.
+build-ios-device/
+build-ios-simulator/
+dist/
 air/
 *.metallib
 *.air

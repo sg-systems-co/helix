@@ -11,12 +11,37 @@ if(NOT APPLE)
     return()
 endif()
 
+# ---------------------------------------------------------------------------
+# Which SDK the shaders are compiled against.
+#
+# A metallib records the platform it was built for, so a macOS metallib will
+# not load on an iOS device -- newLibraryWithData just fails at runtime, well
+# after the build looked like it succeeded. Derive the SDK from the target
+# platform rather than hardcoding `macosx`, and let a caller override it for
+# the simulator (which needs `iphonesimulator`, a third, distinct platform).
+# ---------------------------------------------------------------------------
+if(NOT HELIX_METAL_SDK)
+    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        # CMake sets CMAKE_OSX_SYSROOT to the SDK path or name it resolved; the
+        # simulator and the device are different Metal platforms, so pick the
+        # matching one instead of assuming a physical device.
+        if(CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
+            set(HELIX_METAL_SDK "iphonesimulator")
+        else()
+            set(HELIX_METAL_SDK "iphoneos")
+        endif()
+    else()
+        set(HELIX_METAL_SDK "macosx")
+    endif()
+endif()
+message(STATUS "HELIX: Metal SDK = ${HELIX_METAL_SDK}")
+
 set(HELIX_METAL_PROBE "${CMAKE_BINARY_DIR}/helix_metal_probe.metal")
 file(WRITE "${HELIX_METAL_PROBE}"
      "#include <metal_stdlib>\nkernel void probe(uint t [[thread_position_in_grid]]) {}\n")
 
 execute_process(
-    COMMAND xcrun -sdk macosx metal -c "${HELIX_METAL_PROBE}"
+    COMMAND xcrun -sdk ${HELIX_METAL_SDK} metal -c "${HELIX_METAL_PROBE}"
                   -o "${CMAKE_BINARY_DIR}/helix_metal_probe.air"
     RESULT_VARIABLE HELIX_METAL_PROBE_RESULT
     OUTPUT_QUIET ERROR_VARIABLE HELIX_METAL_PROBE_ERR
@@ -66,7 +91,7 @@ foreach(metal_src ${HELIX_METAL_SOURCES})
     # a genuinely expensive way to lose an afternoon.
     add_custom_command(
         OUTPUT "${air_file}"
-        COMMAND xcrun -sdk macosx metal ${HELIX_METAL_FLAGS}
+        COMMAND xcrun -sdk ${HELIX_METAL_SDK} metal ${HELIX_METAL_FLAGS}
                 -I "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels"
                 -MD -MF "${dep_file}"
                 -c "${metal_src}" -o "${air_file}"
@@ -81,7 +106,7 @@ endforeach()
 # on the output extension.
 add_custom_command(
     OUTPUT "${HELIX_METALLIB}"
-    COMMAND xcrun -sdk macosx metal ${HELIX_AIR_FILES} -o "${HELIX_METALLIB}"
+    COMMAND xcrun -sdk ${HELIX_METAL_SDK} metal ${HELIX_AIR_FILES} -o "${HELIX_METALLIB}"
     DEPENDS ${HELIX_AIR_FILES}
     COMMENT "Linking helix.metallib"
     VERBATIM)
@@ -107,7 +132,7 @@ if(HELIX_MPP_SOURCES)
          "#include <metal_stdlib>\n#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h>\n"
          "kernel void probe(uint t [[thread_position_in_grid]]) {}\n")
     execute_process(
-        COMMAND xcrun -sdk macosx metal -std=metal4.0 -c "${HELIX_MPP_PROBE}"
+        COMMAND xcrun -sdk ${HELIX_METAL_SDK} metal -std=metal4.0 -c "${HELIX_MPP_PROBE}"
                       -o "${CMAKE_BINARY_DIR}/helix_mpp_probe.air"
         RESULT_VARIABLE HELIX_MPP_PROBE_RESULT OUTPUT_QUIET ERROR_QUIET)
 
@@ -120,7 +145,7 @@ if(HELIX_MPP_SOURCES)
             set(mpp_dep "${HELIX_AIR_DIR}/${mpp_name}.d")
             add_custom_command(
                 OUTPUT "${mpp_air}"
-                COMMAND xcrun -sdk macosx metal ${HELIX_MPP_FLAGS}
+                COMMAND xcrun -sdk ${HELIX_METAL_SDK} metal ${HELIX_MPP_FLAGS}
                         -I "${CMAKE_CURRENT_SOURCE_DIR}/src/kernels"
                         -MD -MF "${mpp_dep}"
                         -c "${mpp_src}" -o "${mpp_air}"
@@ -133,7 +158,7 @@ if(HELIX_MPP_SOURCES)
 
         add_custom_command(
             OUTPUT "${HELIX_MPP_METALLIB}"
-            COMMAND xcrun -sdk macosx metal ${HELIX_MPP_AIR_FILES} -o "${HELIX_MPP_METALLIB}"
+            COMMAND xcrun -sdk ${HELIX_METAL_SDK} metal ${HELIX_MPP_AIR_FILES} -o "${HELIX_MPP_METALLIB}"
             DEPENDS ${HELIX_MPP_AIR_FILES}
             COMMENT "Linking helix_mpp.metallib"
             VERBATIM)

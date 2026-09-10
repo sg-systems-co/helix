@@ -16,8 +16,17 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
-option(HELIX_BUILD_TESTS "Build the HELIX test suite" ON)
-option(HELIX_BUILD_BENCH "Build the HELIX benchmarks"  ON)
+# Host-only by default: both build command-line executables, which cannot be
+# launched on an iOS device and would only fail at link time when cross
+# compiling. The library itself is what an app links.
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(HELIX_HOST_TOOLS_DEFAULT OFF)
+else()
+    set(HELIX_HOST_TOOLS_DEFAULT ON)
+endif()
+
+option(HELIX_BUILD_TESTS "Build the HELIX test suite" ${HELIX_HOST_TOOLS_DEFAULT})
+option(HELIX_BUILD_BENCH "Build the HELIX benchmarks"  ${HELIX_HOST_TOOLS_DEFAULT})
 
 add_compile_options($<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
 
