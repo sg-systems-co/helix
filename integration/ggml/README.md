@@ -146,9 +146,17 @@ single-step kernel, not this one.
 | HELIX fp32 | 13.6026 +/- 0.22459 |
 | HELIX MPP (bf16) | 13.6030 +/- 0.22460 |
 
-Both HELIX paths are numerically neutral. Note what that means for the bf16
-path: it **fails ggml's op-level test at 2e-7 yet is indistinguishable end to
-end**, with a delta roughly a thousandth of the standard error. The op tolerance
+Repeated on `Falcon-H1-7B-FORGE-v2` at `d_state = 256`, through the k256 Pass C:
+
+| | PPL |
+|---|---|
+| HELIX fp32 | 10.8016 +/- 0.17875 |
+| HELIX MPP (bf16) | 10.8018 +/- 0.17875 |
+
+Both HELIX paths are numerically neutral, at both model sizes and both compiled
+k extents. Note what that means for the bf16 path: it **fails ggml's op-level
+test at 2e-7 yet is indistinguishable end to end**, with a delta roughly a
+thousandth of the standard error. The op tolerance
 is far stricter than model quality requires. That is an argument for making MPP
 the default eventually, but it is upstream's call to make about their own test,
 not something to decide by loosening a threshold locally -- so the default here

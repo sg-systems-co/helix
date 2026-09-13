@@ -137,8 +137,24 @@ process for exactly this reason:
 ggml_metal_op_ssm_scan_helix: kernel = mpp (d_state=256) (d_state=256 head_dim=128 n_head=24)
 ```
 
-Perplexity under the bf16 path has not been measured; the 1e-5 op-test delta is
-a kernel-level bound, not an end-to-end quality result.
+The op-test delta is a kernel-level bound, not a quality result. End to end on
+`Falcon-H1-0.5B` the bf16 path is **numerically neutral** -- wikitext-2, 40
+chunks: upstream 13.6028, HELIX fp32 13.6026, HELIX MPP 13.6030, a delta about
+a thousandth of the standard error (`integration/ggml/README.md`). So the 2e-7
+op tolerance is far stricter than model quality requires.
+
+Confirmed directly on Falcon-H1-7B through the new k256 kernel -- wikitext-2,
+40 chunks at `n_ctx=2048`, kernel selection verified in each run:
+
+| | PPL |
+|---|---|
+| `simdgroup_matrix (fp32)` | 10.8016 +/- 0.17875 |
+| `mpp (d_state=256)` | 10.8018 +/- 0.17875 |
+
+A delta of +0.0002, or 0.001 of the standard error. The bf16 path is
+indistinguishable end to end at both model sizes and both k extents, while
+still failing the 2e-7 op test -- which is the clearest statement available
+that the op tolerance is not a model-quality threshold.
 
 ### Where precision actually lands
 
