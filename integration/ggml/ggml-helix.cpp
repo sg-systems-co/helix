@@ -332,6 +332,20 @@ bool ggml_metal_op_ssm_scan_helix(struct ggml_metal_encoder * enc, const ggml_te
 
     const helix_tensor t_scratch = scratch ? helix_tensor{ (__bridge void *) scratch, 0 } : HELIX_TENSOR_NULL;
 
+    // Announce the chosen kernel once, the first time a shape is accepted.
+    //
+    // Worth the line: selection fails soft, so a shape that HELIX declines --
+    // or serves on a different backend than the caller assumes -- is invisible
+    // from the outside. An A/B that forgets GGML_HELIX_MPP=1 measures the fp32
+    // path against itself and reports a clean 1.000x, which reads like a real
+    // null result rather than a missing environment variable.
+    static std::once_flag s_announced;
+    std::call_once(s_announced, [&] {
+        std::fprintf(stderr, "%s: kernel = %s (d_state=%d head_dim=%d n_head=%d)\n",
+                     __func__, helix_ctx_backend_desc(ctx, &d),
+                     (int) d.d_state, (int) d.head_dim, (int) d.n_head);
+    });
+
     const helix_status st = helix_scan_encode_into(ctx, (__bridge void *) mtl_enc, &d, t_s0, t_x, t_dt, t_A, t_B, t_C,
                                                    t_ids, t_y, t_s1, t_scratch);
 

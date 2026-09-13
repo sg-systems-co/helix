@@ -112,6 +112,34 @@ GEMM: the 4.19x figure above is the raw matmul rate, and Passes A and B stay on
 the portable kernels, so roughly 1.6x is what reaches the caller. Quoting 4.19x
 as an SSM_SCAN speedup would be wrong.
 
+### End to end, Falcon-H1-7B on llama.cpp
+
+`llama-bench -p 2048`, four alternating pairs, 25 s cooldown between runs:
+
+| | pp2048 |
+|---|---:|
+| `GGML_HELIX_MPP=1` -> `mpp (d_state=256)` | **2078.6 t/s** |
+| default -> `simdgroup_matrix (fp32)` | 1922.8 t/s |
+| | **1.081x** |
+
+Complete separation -- MPP's slowest run beats the fp32 path's fastest -- with
+~0.4% spread inside each arm.
+
+**The opt-in is not optional.** MPP is off by default in the ggml bridge because
+bf16 operands fail ggml's own `test-backend-ops -o SSM_SCAN`, which is
+calibrated at 2e-7: HELIX/MPP measures ~1e-5 and fails 7 of 13 cases where
+HELIX/fp32 passes 13/13. An A/B that forgets `GGML_HELIX_MPP=1` measures the
+fp32 path against itself and returns a clean 1.000x, which is indistinguishable
+from a real null result. The bridge now announces the selected kernel once per
+process for exactly this reason:
+
+```
+ggml_metal_op_ssm_scan_helix: kernel = mpp (d_state=256) (d_state=256 head_dim=128 n_head=24)
+```
+
+Perplexity under the bf16 path has not been measured; the 1e-5 op-test delta is
+a kernel-level bound, not an end-to-end quality result.
+
 ### Where precision actually lands
 
 Only the GEMM *operands* in Pass C are narrowed. The cumulative decay, every
