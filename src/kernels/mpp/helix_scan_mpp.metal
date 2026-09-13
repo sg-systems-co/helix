@@ -46,7 +46,13 @@ inline float helix_simd_prefix_inclusive_mpp(float v, ushort lane) {
     return v;
 }
 
-kernel void helix_chunk_out_mpp(
+// K is d_state. It is a template parameter rather than a runtime value because
+// matmul2d_descriptor requires a constant expression, and specialising on it is
+// what reaches 65.68 TFLOP/s; a dynamic extent would give the shape coverage
+// back but not the speed. One instantiation per supported d_state, listed at
+// the bottom of this file.
+template<int K>
+kernel void helix_chunk_out_mpp_impl(
         constant HelixScanParams& p   [[buffer(0)]],
         device const float*       x   [[buffer(2)]],
         device const float*       dtr [[buffer(3)]],
@@ -85,7 +91,12 @@ kernel void helix_chunk_out_mpp(
     if (t0 >= p.n_tok) return;
     const short tlen = short(min(int(CS), p.n_tok - t0));
 
-    const int   N   = p.d_state;
+    // caps.mm selects the pipeline by d_state, so this cannot fire in normal
+    // operation. It is here because the alternative to a wrong pipeline is an
+    // out-of-bounds tensor read, not a wrong answer.
+    if (p.d_state != K) return;
+
+    const int   N   = K;
     const int   g   = h / p.heads_per_group;
     const float A_h = A[h * p.s_a];
 
@@ -139,19 +150,19 @@ kernel void helix_chunk_out_mpp(
     const int bf_off = seq * p.bf_seq + t0 * p.bf_tok + g * N;
     const array<int32_t, 2> rc_strides = {1, p.bf_tok};
 
-    tensor<device bfloat, ext2, tensor_inline> tC(Cbf + bf_off, ext2(N, CS), rc_strides);
-    tensor<device bfloat, ext2, tensor_inline> tB(Bbf + bf_off, ext2(N, CS), rc_strides);
+    tensor<device bfloat, ext2, tensor_inline> tC(Cbf + bf_off, ext2(K, CS), rc_strides);
+    tensor<device bfloat, ext2, tensor_inline> tB(Bbf + bf_off, ext2(K, CS), rc_strides);
 
     // ---------------------------------------------------------------------
     // G1: M_raw = C . B^T   (CS x N)(N x CS) -> CS x CS
     // then mask and decay in place, narrowing to the bf16 operand G2 needs.
     // ---------------------------------------------------------------------
     {
-        constexpr auto d1 = matmul2d_descriptor(CS, CS, HELIX_MPP_K,
+        constexpr auto d1 = matmul2d_descriptor(CS, CS, K,
                                                 /*transpose_left */ false,
                                                 /*transpose_right*/ true);
         matmul2d<d1, execution_simdgroups<HELIX_NSG>> op1;
-        auto acc = op1.get_destination_cooperative_tensor<decltype(tC), decltype(tB), float>();
+        auto acc = op1.template get_destination_cooperative_tensor<decltype(tC), decltype(tB), float>();
 #pragma unroll
         for (uint16_t i = 0; i < acc.get_capacity(); ++i)
             if (acc.is_valid_element(i)) acc[i] = 0.0f;
@@ -193,11 +204,11 @@ kernel void helix_chunk_out_mpp(
     device bfloat* s_in =
         Sbf + seq * p.sc_seq + cg * p.sc_cg + h * N * p.head_dim + p0;
     const array<int32_t, 2> s_strides = {1, p.head_dim};
-    tensor<device bfloat, ext2, tensor_inline> tS(s_in, ext2(HD, N), s_strides);
+    tensor<device bfloat, ext2, tensor_inline> tS(s_in, ext2(HD, K), s_strides);
 
-    constexpr auto d3 = matmul2d_descriptor(CS, HD, HELIX_MPP_K);
+    constexpr auto d3 = matmul2d_descriptor(CS, HD, K);
     matmul2d<d3, execution_simdgroups<HELIX_NSG>> op3;
-    auto y_inter = op3.get_destination_cooperative_tensor<decltype(tC), decltype(tS), float>();
+    auto y_inter = op3.template get_destination_cooperative_tensor<decltype(tC), decltype(tS), float>();
 #pragma unroll
     for (uint16_t i = 0; i < y_inter.get_capacity(); ++i)
         if (y_inter.is_valid_element(i)) y_inter[i] = 0.0f;
@@ -219,3 +230,17 @@ kernel void helix_chunk_out_mpp(
             y_intra[i] + exp_Lcum[t] * y_inter[i];
     }
 }
+
+// ---------------------------------------------------------------------------
+// Instantiations. Threadgroup use does not grow with K: Mtile is CS x CS and
+// dtX is CS x HD, while C, B and the initial state are read straight from
+// device memory -- so 256 costs the same ~17 KiB as 128 and stays well inside
+// the 32 KiB limit.
+// ---------------------------------------------------------------------------
+typedef decltype(helix_chunk_out_mpp_impl<HELIX_MPP_K0>) helix_chunk_out_mpp_t;
+
+template [[host_name("helix_chunk_out_mpp_k128")]]
+kernel helix_chunk_out_mpp_t helix_chunk_out_mpp_impl<HELIX_MPP_K0>;
+
+template [[host_name("helix_chunk_out_mpp_k256")]]
+kernel helix_chunk_out_mpp_t helix_chunk_out_mpp_impl<HELIX_MPP_K1>;

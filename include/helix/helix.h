@@ -154,6 +154,15 @@ const char*  helix_ctx_last_error(const helix_ctx* ctx);
 // Which backend AUTO would select for this descriptor on this device.
 helix_backend helix_ctx_select_backend(helix_ctx* ctx, const helix_scan_desc* d);
 
+// Human-readable name of the kernel variant this shape resolves to, e.g.
+// "mpp (d_state=256)" or "simdgroup_matrix (fp32)".
+//
+// Exists because selection fails soft: an unsupported shape falls back
+// silently, so a host can request MPP, run correctly, be reasonably fast, and
+// never touch the neural accelerators. Throughput cannot distinguish those,
+// which is why this answers directly. Returns a static string; never null.
+const char* helix_ctx_backend_desc(helix_ctx* ctx, const helix_scan_desc* d);
+
 // ---------------------------------------------------------------------------
 // Scan
 // ---------------------------------------------------------------------------

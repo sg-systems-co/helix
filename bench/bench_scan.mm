@@ -36,7 +36,7 @@ namespace {
 struct Config {
     int32_t L = 4096, n_seq = 1, H = 64, P = 64, N = 128, G = 8;
     int     iters = 50;
-    std::string impls = "1pass,3pass";
+    std::string impls = "1pass,3pass";  // also: 3pass-sgmma, 3pass-mpp
     // Apple GPUs ramp their clock with sustained load. A fixed iteration count
     // measures whatever power state the process happened to start in: the same
     // config was observed at 11.6 ms and 34.2 ms across runs, a 3x spread that
@@ -132,7 +132,16 @@ int main(int argc, char** argv) {
                 Variant v;
                 v.name = name;
                 v.desc = prob.d;
-                v.desc.multipass = (name == "3pass");
+                // "3pass" leaves backend AUTO. The explicit suffixes pin the
+                // Pass C implementation so MPP and simdgroup_matrix can be
+                // measured interleaved in one process -- a cross-process A/B
+                // is not salvageable here, because the GPU power state is
+                // global and sticky (docs/BENCHMARKING.md).
+                const bool is_sgmma = (name == "3pass-sgmma");
+                const bool is_mpp   = (name == "3pass-mpp");
+                v.desc.multipass = (name == "3pass" || is_sgmma || is_mpp);
+                if (is_sgmma) v.desc.backend = HELIX_BACKEND_SGMMA;
+                if (is_mpp)   v.desc.backend = HELIX_BACKEND_MPP;
                 if (!helix_scan_supported(ctx, &v.desc)) {
                     std::fprintf(stderr, "shape unsupported for impl '%s'\n", name.c_str());
                     return 1;

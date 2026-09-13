@@ -16,7 +16,7 @@ namespace {
 // against 10.88 for the same path at bf16, so fp32 is not a compromise here --
 // it is the fast option.
 constexpr HelixMatmulTraits kSgmmaTraits = {
-    HELIX_BACKEND_SGMMA, "sgmma",
+    HELIX_BACKEND_SGMMA, "simdgroup_matrix (fp32)",
     "helix_scan_sgmma_f32",
     "helix_chunk_state_f32",
     "helix_state_scan_f32",
@@ -28,24 +28,48 @@ constexpr HelixMatmulTraits kSgmmaTraits = {
 // bf16: 65.7 TFLOP/s, 4.19x the simdgroup path. Passes A and B stay on the
 // portable kernels -- A's GEMM already runs at fp32 simdgroup rate and B is a
 // memory-bound scan with no matmul in it.
-constexpr HelixMatmulTraits kMppTraits = {
-    HELIX_BACKEND_MPP, "mpp",
+//
+// One traits entry per compiled k extent. The reduction in G1 and G3 runs over
+// d_state and matmul2d_descriptor needs that as a constant expression, so Pass
+// C is specialised rather than dynamic. Keep this table in step with the
+// instantiations at the bottom of helix_scan_mpp.metal.
+constexpr HelixMatmulTraits kMppTraitsK128 = {
+    HELIX_BACKEND_MPP, "mpp (d_state=128)",
     "helix_scan_sgmma_f32",
     "helix_chunk_state_f32",
     "helix_state_scan_f32",
-    "helix_chunk_out_mpp",
+    "helix_chunk_out_mpp_k128",
     /*needs_bf16_staging=*/true,
 };
 
-// The MPP Pass C is compiled against fixed tile extents, so the descriptor has
-// to match them exactly.
-bool mpp_shape_ok(const helix_scan_desc& d) {
-    if (!d.multipass) return false;              // single-pass has no Pass C
-    if (d.d_state != HELIX_MPP_K) return false;  // k extent is compile-time
+// Falcon-H1 and Nemotron-H. Threadgroup use is identical to the 128 kernel --
+// Mtile and dtX are sized by chunk and head-dim slab, not by d_state, and C, B
+// and the initial state are read straight from device memory.
+constexpr HelixMatmulTraits kMppTraitsK256 = {
+    HELIX_BACKEND_MPP, "mpp (d_state=256)",
+    "helix_scan_sgmma_f32",
+    "helix_chunk_state_f32",
+    "helix_state_scan_f32",
+    "helix_chunk_out_mpp_k256",
+    /*needs_bf16_staging=*/true,
+};
+
+// The compiled Pass C variants, in the order select_traits should consider them.
+constexpr struct { int k; const HelixMatmulTraits* traits; } kMppVariants[] = {
+    { HELIX_MPP_K0, &kMppTraitsK128 },
+    { HELIX_MPP_K1, &kMppTraitsK256 },
+};
+
+// Returns the traits for this d_state, or nullptr when no kernel was compiled
+// for it. Returning nullptr is what routes the caller back to simdgroup_matrix.
+const HelixMatmulTraits* mpp_traits_for(const helix_scan_desc& d) {
+    if (!d.multipass) return nullptr;            // single-pass has no Pass C
     // The state tensor spans a full HELIX_HD-wide slab; a partial trailing slab
     // would read past the end of each row.
-    if (d.head_dim % HELIX_HD != 0) return false;
-    return true;
+    if (d.head_dim % HELIX_HD != 0) return nullptr;
+    for (const auto& v : kMppVariants)
+        if (d.d_state == v.k) return v.traits;
+    return nullptr;
 }
 
 }  // namespace
@@ -63,8 +87,8 @@ const HelixMatmulTraits& select_traits(helix_ctx* ctx, const helix_scan_desc& d)
 
     const bool want_mpp = (d.backend == HELIX_BACKEND_AUTO || d.backend == HELIX_BACKEND_MPP);
 
-    if (want_mpp && ctx->has_neural_accel && ctx->mpp_library && mpp_shape_ok(d))
-        return kMppTraits;
+    if (want_mpp && ctx->has_neural_accel && ctx->mpp_library)
+        if (const HelixMatmulTraits* t = mpp_traits_for(d)) return *t;
 
     return kSgmmaTraits;
 }
@@ -76,6 +100,13 @@ extern "C" helix_backend helix_ctx_select_backend(helix_ctx* ctx, const helix_sc
     if (!ctx->has_simdgroup_mm) return HELIX_BACKEND_REF;
     if (d->backend == HELIX_BACKEND_SGMMA) return HELIX_BACKEND_SGMMA;
     return helix::rt::select_traits(ctx, *d).backend;
+}
+
+extern "C" const char* helix_ctx_backend_desc(helix_ctx* ctx, const helix_scan_desc* d) {
+    if (!ctx || !d)              return "unavailable (null context)";
+    if (!ctx->has_simdgroup_mm)  return "unavailable (no simdgroup_matrix)";
+    if (!helix_scan_supported(ctx, d)) return "declined (shape unsupported)";
+    return helix::rt::select_traits(ctx, *d).name;
 }
 
 extern "C" bool helix_scan_supported(helix_ctx* ctx, const helix_scan_desc* d) {

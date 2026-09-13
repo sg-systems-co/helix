@@ -77,15 +77,40 @@ as two independent steps.
 
 This is what `HelixMatmulTraits` encodes (`src/runtime/caps.mm`):
 
-- **`MppTraits`** -- Apple10 (M5). Pass C runs `helix_chunk_out_mpp` with bf16
-  operands and fp32 accumulators. Requires `d_state == 128` and
-  `head_dim % 64 == 0`, because the matmul descriptors are compile-time.
-- **`SgmmaTraits`** -- Apple7-9 (M1-M4, A14+), and any shape outside the MPP
-  kernel's fixed extents. fp32 `simdgroup_matrix` throughout.
+- **`MppTraitsK128` / `MppTraitsK256`** -- Apple10 (M5). Pass C runs
+  `helix_chunk_out_mpp_k{128,256}` with bf16 operands and fp32 accumulators.
+  The G1 and G3 reductions run over `d_state`, and `matmul2d_descriptor` needs
+  that as a constant expression, so Pass C is emitted once per supported value
+  rather than once with `dynamic_extent` -- specialisation is what makes this
+  path worth taking. `head_dim % 64 == 0` is also required, because the state
+  tensor spans a full 64-wide slab.
+
+  Threadgroup use does not grow with `d_state`: `Mtile` is `CS x CS` and `dtX`
+  is `CS x HD`, while C, B and the initial state are read straight from device
+  memory. Both instantiations sit at ~17 KiB against the 32 KiB limit.
+- **`SgmmaTraits`** -- Apple7-9 (M1-M4, A14+), and any `d_state` with no
+  compiled MPP kernel. fp32 `simdgroup_matrix` throughout.
 
 Selection never fails: anything the MPP path cannot serve falls back silently.
 `HELIX_FORCE_BACKEND=sgmma` pins the fallback so it can be regression-tested on
-M5 hardware.
+M5 hardware, and `helix_ctx_backend_desc()` reports which variant a shape
+actually resolves to -- the silent fallback is safe, but it is also invisible,
+and throughput alone cannot distinguish "MPP ran" from "MPP declined".
+
+### Measured, M5 Max, 3-pass end to end
+
+`bench_scan --impl=3pass-sgmma,3pass-mpp`, interleaved in one process:
+
+| shape | sgmma | mpp | |
+|---|---:|---:|---:|
+| `d_state=128 head_dim=64` (Mamba-2) | 1.436 ms | 0.951 ms | 1.51x |
+| `d_state=128 head_dim=128` | 1.910 ms | 1.210 ms | 1.58x |
+| `d_state=256 head_dim=128` (Falcon-H1) | 3.733 ms | 2.250 ms | 1.66x |
+
+L=2048, 24-32 heads, min of 40. Note this is the **whole scan**, not the Pass C
+GEMM: the 4.19x figure above is the raw matmul rate, and Passes A and B stay on
+the portable kernels, so roughly 1.6x is what reaches the caller. Quoting 4.19x
+as an SSM_SCAN speedup would be wrong.
 
 ### Where precision actually lands
 

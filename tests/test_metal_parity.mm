@@ -88,6 +88,14 @@ const Shape kShapes[] = {
     { 300, 1,  8,  64, 128, 2, "L=300 four full + 44 ragged"     },
     { 256, 1,  4,  64,  64, 1, "d_state=64"                      },
     { 256, 1,  4, 128, 128, 1, "head_dim=128 (ggml falls back)"   },
+    // d_state=256 -- Falcon-H1 and Nemotron-H, and the second compiled MPP
+    // k extent. Covered at both head-dim slab counts and with a ragged tail,
+    // because the k256 Pass C is a separate instantiation from k128 and
+    // nothing else in this matrix exercises it.
+    { 256, 1,  4, 128, 256, 1, "d_state=256 (MPP k256, Falcon-H1)" },
+    { 256, 1,  4,  64, 256, 1, "d_state=256 head_dim=64 one slab" },
+    { 300, 1,  4, 128, 256, 1, "d_state=256 ragged tail"         },
+    { 256, 1,  8, 128, 256, 2, "d_state=256 grouped"             },
     { 256, 1,  4, 192, 128, 1, "head_dim=192 three slabs"        },
     { 256, 1,  8, 128, 128, 8, "n_group=8 grouped"               },
     { 256, 4,  4,  64, 128, 1, "n_seq=4 batched"                 },

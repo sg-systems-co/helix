@@ -25,10 +25,22 @@
 // stage its per-chunk decays in a fixed threadgroup array. The host clamps n_cg
 // to this.
 #define HELIX_MAX_CG 256
-// k extent for the MPP matmuls whose reduction runs over d_state. Compile-time
-// rather than dynamic_extent so the descriptor is a constant expression; the
-// runtime only selects the MPP path when d_state matches.
-#define HELIX_MPP_K 128
+// k extents for the MPP matmuls whose reduction runs over d_state.
+//
+// matmul2d_descriptor needs k as a constant expression, so Pass C is emitted
+// once per supported value rather than once with dynamic_extent -- a dynamic
+// extent costs the specialisation that makes this path worth taking at all.
+// The runtime picks the instantiation by d_state and declines anything else,
+// which is what keeps the fallback safe rather than silently wrong.
+//
+//   128 -- Mamba-2 reference shape
+//   256 -- Falcon-H1, Nemotron-H
+//
+// Adding a value means adding a define here, an instantiation in
+// helix_scan_mpp.metal, and a traits entry in caps.mm. All three are checked
+// against each other by tests/test_shapes.cpp.
+#define HELIX_MPP_K0 128
+#define HELIX_MPP_K1 256
 
 struct HelixScanParams {
     int n_tok;
